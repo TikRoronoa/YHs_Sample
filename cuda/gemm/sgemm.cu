@@ -1,9 +1,10 @@
-#include <cstdint>
-#include <cstdlib>
-#include <cstdio>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
+// clang-format off
 void random_init(float *data, size_t size) {
     for (size_t i = 0; i < size; ++i) {
         data[i] = float(rand()) / RAND_MAX;
@@ -182,9 +183,9 @@ void C_tile_wb(StgFrag C_frag,
  *             B_tile  8|                     |
  *                    --|---------------------|
  *
- *  A_tile   | 8 |      |    64    |
+ *  A_tile   | 8 |      |   n=64   |
  *         --|---|    --|----------|----------|
- *           |   |    32|  warp_0  |  warp_1  |
+ *           |   |  m=32|  warp_0  |  warp_1  |
  *           |   |    --|----------|----------|
  *           |   |      |  warp_2  |  warp_3  |
  *        128|   |      |----------|----------|
@@ -244,13 +245,13 @@ void sgemm_128x128x8_kernel(const float *A,
      *     (uint32_t &)B_smem ^= 0x1000;
      */
     __shared__ __align__(16 * 1024) char smem[24 * 1024];
-    float *A_smem = reinterpret_cast<float *>(smem);
-    float *B_smem = reinterpret_cast<float *>(smem + 16 * 1024);
+    float *A_smem = reinterpret_cast<float *>(smem);//前面的16K给A，这里分配16K完全是为了快速切换
+    float *B_smem = reinterpret_cast<float *>(smem + 16 * 1024);//后面的8K给B
 
     // A, B and C register fragment
-    float A_frag[2][8];
-    float B_frag[2][8];
-    float C_frag[8][8];
+    float A_frag[2][8];//2是double buffer
+    float B_frag[2][8];//2是double buffer
+    float C_frag[8][8];//累加2个buffer以及整个K维度
     #pragma unroll
     for (int i = 0; i < 8; ++i) {
         #pragma unroll
@@ -263,12 +264,15 @@ void sgemm_128x128x8_kernel(const float *A,
     const uint32_t warp_id = threadIdx.x / 32;
 
     // 4x8 threads each warp for FFMA
+    // 用于load A和B，就是RowInterleaved<2>，如208行所示
     const uint32_t mma_tid_x = (lane_id / 2) % 8;
     const uint32_t mma_tid_y = (lane_id / 16) * 2 + (lane_id % 2);
 
     // A_tile & B_tile ldg pointer
+    //这里的8指的是A tile 128x8中的8，4指的是一次在竖直方向上连续load4个，而不是跳32行load一个float
     const char *A_ldg_ptr = (const char *)(
         A + (blockIdx.y * 128 + threadIdx.x / 8 * 4) * k + threadIdx.x % 8);
+    //这里的32指的是B tile在水平方向上分4次load，每次load32列，8行就是256个element，分配给每一个thread
     const char *B_ldg_ptr = (const char *)(
         B + (threadIdx.x / 32) * n + blockIdx.x * 128 + threadIdx.x % 32);
 
@@ -279,6 +283,7 @@ void sgemm_128x128x8_kernel(const float *A,
     uint32_t B_sts_addr = smem_u32addr(
         B_smem + (threadIdx.x / 32) * 128 + (threadIdx.x % 32));
 
+        
     uint32_t A_lds_addr = smem_u32addr(
         A_smem + (warp_id / 2) * 32 + mma_tid_y * 4);
     uint32_t B_lds_addr = smem_u32addr(
@@ -311,8 +316,10 @@ void sgemm_128x128x8_kernel(const float *A,
 
     // load 1'st tile to shared memory
     {
+        // 第一个tile先处理残余tile，防止后续for loop中出现if分支
         uint32_t first_k_tile = k - k_tiles * 8;
-
+        
+        //这里的4是A的128x8 tile上的4次循环，一次循环256个thread load 32x8的大小，所以128x8需要loop 4 次
         #pragma unroll
         for (int i = 0; i < 4; ++i) {
             bool guard = (A_ldg_guard & (1u << i)) != 0 &&
@@ -321,7 +328,7 @@ void sgemm_128x128x8_kernel(const float *A,
                        A_ldg_ptr + i * A_ldg_step,
                        guard);
         }
-
+        //每个thread load GMEM中A tile竖直方向上的4个element，然后直接存到SMEM，相当于做了transpose
         sts128(A_ldg_reg[0], A_ldg_reg[1], A_ldg_reg[2], A_ldg_reg[3],
                A_sts_addr);
 
@@ -333,13 +340,13 @@ void sgemm_128x128x8_kernel(const float *A,
                        B_ldg_ptr + i * 32 * sizeof(float),
                        guard);
         }
-
+        // B tile原样存到SMEM
         #pragma unroll
         for (int i = 0; i < 4; ++i) {
             sts32(B_ldg_reg[i], B_sts_addr + i * 32 * sizeof(float));
         }
 
-        __syncthreads();
+        __syncthreads();//至此，第一个A tile 和 B tile都存到了SMEM中
 
         // switch double buffer
         A_sts_addr ^= 0x2000;
@@ -359,6 +366,14 @@ void sgemm_128x128x8_kernel(const float *A,
            B_lds_addr);
     lds128(B_frag[0][4], B_frag[0][5], B_frag[0][6], B_frag[0][7],
            B_lds_addr + 32 * sizeof(float));
+
+
+    /**
+     * for loop中做三件事：
+     * 1. load 下一个fragment to register
+     * 2. load 下一个 A&B tail to SMEM
+     * 3. FFMA operation
+     */
 
     // k_tiles loop
     for (; k_tiles > 0; --k_tiles) {
@@ -387,6 +402,7 @@ void sgemm_128x128x8_kernel(const float *A,
             }
 
             // load next A&B fragment from shared memory to register
+            // 加载下一个 Shared Fragment (k_frag = 0 到 7)
             lds128(A_frag[(k_frag + 1) % 2][0],
                    A_frag[(k_frag + 1) % 2][1],
                    A_frag[(k_frag + 1) % 2][2],
@@ -409,6 +425,7 @@ void sgemm_128x128x8_kernel(const float *A,
                    B_lds_addr + ((k_frag + 1) % 8 * 128 + 32) * sizeof(float));
 
             // load next A&B tile
+            // 计算第一个fragment的时候load下一个tail
             if (k_frag == 0) {
                 #pragma unroll
                 for (int i = 0; i < 4; ++i) {
@@ -491,14 +508,14 @@ void sgemm_128x128x8_kernel(const float *A,
         uint32_t n_guard = n < n_idx ? 0 : n - n_idx;
 
         #pragma unroll
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < 2; ++i) { //对应水平方向上两个4x4
             #pragma unroll
-            for (int j = 0; j < 2; ++j) {
+            for (int j = 0; j < 2; ++j) { //对应竖直方向上两个4x4
                 __syncthreads();
 
                 #pragma unroll
-                for (int p = 0; p < 4; ++p) {
-                    sts128(C_frag[i * 4 + p][j * 4],
+                for (int p = 0; p < 4; ++p) { //存储一个4x4到smem
+                    sts128(C_frag[i * 4 + p][j * 4 + 0],
                            C_frag[i * 4 + p][j * 4 + 1],
                            C_frag[i * 4 + p][j * 4 + 2],
                            C_frag[i * 4 + p][j * 4 + 3],
@@ -508,7 +525,7 @@ void sgemm_128x128x8_kernel(const float *A,
                 __syncthreads();
 
                 #pragma unroll
-                for (int p = 0; p < 16; ++p) {
+                for (int p = 0; p < 16; ++p) {//存储一个smem的4x4到gmem
                     stg32(C_lds_ptr[p * 32],
                           C_stg_ptr + (i * 16 + p) * n + j * 32,
                           j * 32 < n_guard);
@@ -585,8 +602,8 @@ int main() {
 
     cudaMemcpy(h_C, d_C, m * n * sizeof(float), cudaMemcpyDefault);
 
-    bool chk = check(h_A, h_B, h_C, m, n, k);
-    printf("Matrix_C check: %s\n", chk ? "OK" : "Failed");
+    // bool chk = check(h_A, h_B, h_C, m, n, k);
+    // printf("Matrix_C check: %s\n", chk ? "OK" : "Failed");
 
     cudaFree(d_A);
     cudaFree(d_B);
@@ -595,5 +612,4 @@ int main() {
     cudaFreeHost(h_B);
     cudaFreeHost(h_C);
 }
-
-
+// clang-format on

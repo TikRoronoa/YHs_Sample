@@ -42,7 +42,7 @@ uint32_t smem_u32addr(const void *smem_ptr) {
 
     return addr;
 }
-
+//LoaD Global STore Shared
 __device__ __forceinline__
 void ldgsts32(const uint32_t &smem_addr,
               const void *gmem_ptr,
@@ -80,7 +80,7 @@ __device__ __forceinline__
 void ldgsts_commit() {
     asm volatile ("cp.async.wait_all;\n"::);
 }
-
+// STore Global
 __device__ __forceinline__
 void stg32(const float &reg, void *ptr, bool guard) {
     asm volatile (
@@ -90,7 +90,7 @@ void stg32(const float &reg, void *ptr, bool guard) {
         : : "l"(ptr), "f"(reg), "r"((int)guard)
     );
 }
-
+// LoaD Shared
 __device__ __forceinline__
 void lds128(float &reg0, float &reg1,
             float &reg2, float &reg3,
@@ -101,7 +101,7 @@ void lds128(float &reg0, float &reg1,
         : "r"(addr)
     );
 }
-
+// STore Shared
 __device__ __forceinline__
 void sts32(const float &reg, const uint32_t &addr) {
     asm volatile (
@@ -197,6 +197,7 @@ void C_tile_wb(StgFrag C_frag,
  *           |   |      |         |         |         |         |
  *         --|---|      |---------|---------|---------|---------|
  *
+ * <5120/128, 4096/256> --> <40, 16>
  * ----------------------------------------------------------------
  * warp tile map:
  *
@@ -254,7 +255,7 @@ void ampere_sgemm_128x256x8_kernel(
         uint32_t B_ldg_step) {  // n * sizeof(float) * 8
     /*
      * matrix A & B thread block tile shared memory (double buffer)
-     * matrix A: 132 * 8 * 4Byte/item * double buffer = 4.125KB * 2
+     * matrix A: 132 * 8 * 4Byte/item * double buffer = 4.125KB * 2 = 8.25KB
      * matrix B: 256 * 8 * 4Byte/item * double buffer = 16KB
      *
      * for double buffer faster switch, A_smem requires 8KB * 2 shared memory
