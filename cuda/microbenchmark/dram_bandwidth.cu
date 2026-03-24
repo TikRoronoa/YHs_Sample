@@ -5,7 +5,7 @@ const int MEMORY_OFFSET = (1u << 20) * 16;
 const int BENCH_ITER = 100;
 
 const int BLOCK = 128;
-const int LDG_UNROLL = 1;
+const int LDG_UNROLL = 4;
 
 __device__ __forceinline__
 uint4 ldg_cs(const void *ptr) {
@@ -152,6 +152,7 @@ void benchmark(size_t size_in_byte) {
 }
 
 int main() {
+    // 起始size：4MB
     size_t size = (1lu << 20) * 4;
 
     // 4MB~1GB

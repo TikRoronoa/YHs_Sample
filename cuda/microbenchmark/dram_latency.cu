@@ -2,7 +2,7 @@
 #include <cstdint>
 
 // number of LDG instructions to be timed
-const int ROUND = 10;
+const int ROUND = 10;// 460cycles，注意这里，随着取值变大，latency变大，到515cycels保持稳定
 // stride in byte between LDG instructions
 // should be greater than L2 cache line size to avoid L2 cache hit
 const int STRIDE = 1024;

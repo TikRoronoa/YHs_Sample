@@ -3,7 +3,7 @@
 
 const int WARMUP = 100;
 // number of LDG instructions to be timed
-const int ROUND = 10;
+const int ROUND = 10;// 230cycles，注意这里，随着取值变大，latency变大，到250cycels保持稳定
 // stride in byte between LDG instructions
 const int STRIDE = 128;
 

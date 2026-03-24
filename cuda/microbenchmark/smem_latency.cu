@@ -3,7 +3,7 @@
 
 const int WARMUP = 100;
 // number of LDS instructions to be timed
-const int ROUND = 50;
+const int ROUND = 50;// 一直稳定在23cycles
 
 __global__ __launch_bounds__(16, 1)
 void smem_latency_kernel(const uint32_t *addr, uint32_t *ret, uint32_t *clk) {
