@@ -93,7 +93,7 @@ int main()
     // cycle = time_ms × frequency_GHz × 1e6
     // RTX 3080/3090 boost clock ≈ 1.7~1.9 GHz，先用 1.8GHz 估算
     // 更准确的做法：用 nvml 读实时频率
-    float freq_ghz = 1.8f;  // 替换成你的卡的实际 boost clock
+    float freq_ghz = 1.785f;  // 替换成你的卡的实际 boost clock
     float total_cycles = avg_ms * freq_ghz * 1e6f;
     float latency_per_ffma = total_cycles / TOTAL_FFMA;
 
