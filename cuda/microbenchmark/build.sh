@@ -1,2 +1,1 @@
-nvcc -O3 ${1} -arch sm_${2} -Xptxas=-v
-
+nvcc -O3 ${1} -arch sm_${2} -Xptxas=-v -o ${3:-${1%.cu}}

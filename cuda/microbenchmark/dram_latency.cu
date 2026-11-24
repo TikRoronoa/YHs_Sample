@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cstdint>
+#include <cuda_runtime.h>
 
 // number of LDG instructions to be timed
-const int ROUND = 10;// 460cycles，注意这里，随着取值变大，latency变大，到515cycels保持稳定
+const int ROUND = 100;// 460cycles，注意这里，随着取值变大，latency变大，到515cycels保持稳定
 // stride in byte between LDG instructions
 // should be greater than L2 cache line size to avoid L2 cache hit
 const int STRIDE = 1024;
@@ -57,33 +58,40 @@ void dram_latency_kernel(const uint32_t *stride,
     const char *ldg_ptr = reinterpret_cast<const char *>(stride + threadIdx.x);
     uint32_t val;
 
-    // populate TLB
-    asm volatile (
-        "ld.global.cg.b32 %0, [%1];\n"
-        : "=r"(val)
-        : "l"(ldg_ptr)
-        : "memory"
-    );
+    // populate TLB，触发一次TLB地址翻译，把后面追逐会用到的页暖进 TLB
+    // //走 global，.cg（Cache Global：走 L2，不在 L1 里分配）
+    // //普通 *(const uint32_t*)ldg_ptr，常见是 .ca（Cache All：可进 L1+L2）
+    // asm volatile (
+    //     "ld.global.cg.b32 %0, [%1];\n"
+    //     : "=r"(val)
+    //     : "l"(ldg_ptr)
+    //     : "memory"
+    // );
+    val = __ldcg(reinterpret_cast<const uint32_t *>(ldg_ptr));
 
     ldg_ptr += val;
 
-    uint32_t start;
-    uint32_t stop;
+    // uint32_t start;
+    // uint32_t stop;
 
-    asm volatile (
-        "bar.sync 0;\n"
-        "mov.u32 %0, %%clock;\n"
-        : "=r"(start) : : "memory"
-    );
+    // asm volatile (
+    //     "bar.sync 0;\n"
+    //     "mov.u32 %0, %%clock;\n"
+    //     : "=r"(start) : : "memory"
+    // );
+    __syncthreads();
+    uint32_t start = clock64();
 
     #pragma unroll
     for (int i = 0; i < ROUND; ++i) {
-        asm volatile (
-            "ld.global.cg.b32 %0, [%1];\n"
-            : "=r"(val)
-            : "l"(ldg_ptr)
-            : "memory"
-        );
+        // asm volatile (
+        //     "ld.global.cg.b32 %0, [%1];\n"
+        //     : "=r"(val)
+        //     : "l"(ldg_ptr)
+        //     : "memory"
+        // );
+        val = __ldcg(reinterpret_cast<const uint32_t *>(ldg_ptr));
+
 
         /*
          * dependent LDG instructions to make sure that
@@ -94,11 +102,13 @@ void dram_latency_kernel(const uint32_t *stride,
         ldg_ptr += val;
     }
 
-    asm volatile (
-        "bar.sync 0;\n"
-        "mov.u32 %0, %%clock;\n"
-        : "=r"(stop) : : "memory"
-    );
+    // asm volatile (
+    //     "bar.sync 0;\n"
+    //     "mov.u32 %0, %%clock;\n"
+    //     : "=r"(stop) : : "memory"
+    // );
+    __syncthreads();
+    uint32_t stop = clock64();
 
     clk[threadIdx.x] = stop - start;
 
