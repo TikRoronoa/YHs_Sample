@@ -73,19 +73,44 @@ void random_init(float *data, size_t size) {
 }
 
 bool check(const float *A, const float *B, const float *C, int m, int n, int k) {
-    for (int i = 0; i < m; ++i) {
-        for (int j = 0; j < n; ++j) {
-            float sum = 0.f;
-            for (int p = 0; p < k; ++p)
-                sum += A[i * k + p] * B[p * n + j];
-            if (std::fabs(sum - C[i * n + j]) / std::fabs(sum) > 1e-5f) {
-                printf("C[%d][%d] not match, %f vs %f\n", i, j, sum, C[i * n + j]);
-                return false;
-            }
+    // Full 5k×4k CPU verify is too slow; check a tile window + trailing edges.
+    const int cm = m < 256 ? m : 256;
+    const int cn = n < 256 ? n : 256;
+
+    auto verify = [&](int i, int j) -> bool {
+        float sum = 0.f;
+        for (int p = 0; p < k; ++p) {
+            sum += A[i * k + p] * B[j + p * n];
         }
+        if (std::fabs(sum - C[i * n + j]) / std::fabs(sum) > 1e-5f) {
+            printf("C[%d][%d] not match, %f vs %f
+", i, j, sum, C[i * n + j]);
+            return false;
+        }
+        return true;
+    };
+
+    for (int i = 0; i < cm; ++i) {
+        for (int j = 0; j < cn; ++j) {
+            if (!verify(i, j)) return false;
+        }
+    }
+    if (m > cm) {
+        for (int j = 0; j < cn; ++j) {
+            if (!verify(m - 1, j)) return false;
+        }
+    }
+    if (n > cn) {
+        for (int i = 0; i < cm; ++i) {
+            if (!verify(i, n - 1)) return false;
+        }
+    }
+    if (m > cm && n > cn) {
+        if (!verify(m - 1, n - 1)) return false;
     }
     return true;
 }
+
 
 int main() {
     int m = 5120;

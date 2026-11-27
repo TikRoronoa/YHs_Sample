@@ -10,26 +10,45 @@ void random_init(float *data, size_t size) {
     }
 }
 
-bool check(const float *A,
-           const float *B,
-           const float *C,
-           int m, int n, int k) {
-    for (int i = 0; i < m; ++i) {
-        for (int j = 0; j < n; ++j) {
-            float sum = 0.f;
-            for (int p = 0; p < k; ++p) {
-                sum += A[i * k + p] * B[j + p * n];
-            }
+bool check(const float *A, const float *B, const float *C, int m, int n, int k) {
+    // Full 5k×4k CPU verify is too slow; check a tile window + trailing edges.
+    const int cm = m < 256 ? m : 256;
+    const int cn = n < 256 ? n : 256;
 
-            if (std::fabs(sum - C[i * n + j]) / std::fabs(sum) > 1e-5f) {
-                printf("C[%d][%d] not match, %f vs %f\n", i, j, sum, C[i * n + j]);
-                return false;
-            }
+    auto verify = [&](int i, int j) -> bool {
+        float sum = 0.f;
+        for (int p = 0; p < k; ++p) {
+            sum += A[i * k + p] * B[j + p * n];
+        }
+        if (std::fabs(sum - C[i * n + j]) / std::fabs(sum) > 1e-5f) {
+            printf("C[%d][%d] not match, %f vs %f
+", i, j, sum, C[i * n + j]);
+            return false;
+        }
+        return true;
+    };
+
+    for (int i = 0; i < cm; ++i) {
+        for (int j = 0; j < cn; ++j) {
+            if (!verify(i, j)) return false;
         }
     }
-
+    if (m > cm) {
+        for (int j = 0; j < cn; ++j) {
+            if (!verify(m - 1, j)) return false;
+        }
+    }
+    if (n > cn) {
+        for (int i = 0; i < cm; ++i) {
+            if (!verify(i, n - 1)) return false;
+        }
+    }
+    if (m > cm && n > cn) {
+        if (!verify(m - 1, n - 1)) return false;
+    }
     return true;
 }
+
 
 __device__ __forceinline__
 uint32_t smem_u32addr(const void *smem_ptr) {
@@ -223,8 +242,7 @@ void C_tile_wb(StgFrag C_frag,
  *    |---|     |-------------------------------||-------------------------------|
  *
  */
-__global__ __launch_bounds__(256, 2)
-void sgemm_128x128x8_kernel(const float *A,
+__global__ void sgemm_128x128x8_kernel(const float *A,
                             const float *B,
                             float *C,
                             uint32_t m,
@@ -584,9 +602,8 @@ int main() {
     printf("Performance: %fGFLOPS\n", gflops);
 
     cudaMemcpy(h_C, d_C, m * n * sizeof(float), cudaMemcpyDefault);
-
-    // bool chk = check(h_A, h_B, h_C, m, n, k);
-    // printf("Matrix_C check: %s\n", chk ? "OK" : "Failed");
+    bool chk = check(h_A, h_B, h_C, m, n, k);
+    printf("Matrix_C check: %s\n", chk ? "OK" : "Failed");
 
     cudaFree(d_A);
     cudaFree(d_B);
